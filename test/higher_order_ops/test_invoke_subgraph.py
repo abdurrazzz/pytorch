@@ -21,10 +21,7 @@ from torch._dynamo.testing import (
     InductorAndRecordGraphs,
     normalize_gm,
 )
-from torch._higher_order_ops.invoke_subgraph import (
-    NestedCompileBackend,
-    NestedCompileRegionOptions,
-)
+from torch._higher_order_ops.invoke_subgraph import NestedCompileRegionOptions
 from torch._higher_order_ops.schema import find_hop_schema
 from torch._inductor import config as inductor_config
 from torch._inductor.pattern_matcher import (
@@ -1641,11 +1638,24 @@ class GraphModule(torch.nn.Module):
         )
         self.assertEqual(len(bw_add_nodes), 1)
 
+    @torch._dynamo.config.patch("enable_invoke_subgraph_regional_compile", True)
     def test_backend_parameter(self):
-        backend = NestedCompileRegionOptions(NestedCompileBackend.INDUCTOR)
+        from torch._inductor import config as inductor_config
+        from torch._inductor.compile_fx import compile_fx_inner
+
+        config_patches = {}
+        inductor_compile = inductor_config.patch(config_patches)(compile_fx_inner)
+        # functools.partial(compile_fx_inner, )
+
+        backend = NestedCompileRegionOptions(
+            fw_compiler=inductor_compile,
+            bw_compiler=inductor_compile,
+            partitioner="default_partition",
+            decompositions={},
+        )
 
         # Test that backend parameter is properly set in node.meta
-        @nested_compile_region(backend_options=backend)
+        @nested_compile_region(aot_config=backend)
         def gn_with_backend(x):
             return torch.sin(x)
 
@@ -1677,11 +1687,11 @@ class GraphModule(torch.nn.Module):
         # We should have 2 invoke_subgraph calls
         self.assertEqual(len(invoke_subgraph_nodes), 2)
 
-        # First invoke_subgraph (gn_with_backend) should have backend
-        self.assertIn("custom", invoke_subgraph_nodes[0].meta)
+        # First invoke_subgraph (gn_with_backend) should have config
+        self.assertIn("nested_region_config", invoke_subgraph_nodes[0].meta)
 
-        # Second invoke_subgraph (gn_without_backend) should have custom=None or no custom
-        backend_value = invoke_subgraph_nodes[1].meta.get("custom", None)
+        # Second invoke_subgraph (gn_without_backend) should have config=None or no config
+        backend_value = invoke_subgraph_nodes[1].meta.get("nested_region_config", None)
         self.assertIsNone(backend_value)
 
     def test_complex(self):

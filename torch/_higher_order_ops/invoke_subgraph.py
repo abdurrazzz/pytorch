@@ -1,7 +1,6 @@
 # mypy: allow-untyped-defs
 
 import contextlib
-import enum
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -51,25 +50,21 @@ class OutputMetadata:
     indexes_with_no_grad: set[int] = field(default_factory=set)
 
 
-class NestedCompileBackend(enum.Enum):
-    INDUCTOR = "inductor"
-    DEFAULT = "default"
-
-
 @dataclass
 class NestedCompileRegionOptions:
-    # If default, does nothing, inherient the torch.compile backend
-    # If "inductor", will add {"compile_with_inductor": {"inductor_configs":config}} to HOP node meta "custom"
-    # If "custom" already has "compile_with_inductor", this config will override
-    backend: NestedCompileBackend = NestedCompileBackend.DEFAULT
+    # A Callable
+    fw_compiler: Callable
+    bw_compiler: Callable
 
-    # If backend == "inductor", the configs
-    inductor_configs: Optional[dict[str, Any]] = None
+    # Note: [InvokeSubgraphHOP Partitioner]
+    # If not None, add "partitioner" to HOP node meta.
+    # If Callable, directly assign the callable, but the callable cannot be pickled
+    # If str, the options are "default_partition" and "min_cut_rematerialization_partition".
+    # The HOP joint graph will be partitioned using the corresponding functions in
+    # torch/_functorch/partitioners.py
+    partitioner: Optional[Callable | str] = None
 
-    # If not None, add "partitioner" to HOP node meta
-    partitioner: Optional[Callable] = None
-
-    # TODO: add decomposition function
+    decompositions: Optional[dict[str, Any]] = None
 
 
 class InvokeSubgraphHOP(HigherOrderOperator):
@@ -174,7 +169,7 @@ def invoke_subgraph_placeholder(func, *args, **kwargs):
 
 
 def mark_compile_region(
-    fn=None, backend_options: Optional[NestedCompileRegionOptions] = None
+    fn=None, aot_config: Optional[NestedCompileRegionOptions] = None
 ):
     """
     This wrapper instructs torch.compile to compile the wrapped region once and
@@ -198,7 +193,7 @@ def mark_compile_region(
             return invoke_subgraph_placeholder(inner_func, *args, **kwargs)
 
         inner.__marked_compile_region_fn__ = func  # type: ignore[attr-defined]
-        func.__marked_compile_region_backend__ = backend_options  # type: ignore[attr-defined]
+        func.__marked_compile_region_config__ = aot_config  # type: ignore[attr-defined]
 
         return inner
 

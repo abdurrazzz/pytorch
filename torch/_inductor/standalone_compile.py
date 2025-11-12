@@ -357,6 +357,7 @@ def standalone_compile(
     dynamic_shapes: Any,
     options: Any,
     aot: bool = False,  # AOT mode, which uses BundledAOTAutogradCache
+    compile_fn=None,
 ) -> CompiledArtifact:
     """
     Implementation of torch.inductor.standalone_compile
@@ -420,9 +421,53 @@ def standalone_compile(
     ):
         # compile_fx can mutate gm
         gm = copy.deepcopy(gm)
-        compiled_fn = compile_fx(
-            gm, example_inputs, ignore_shape_env=ignore_shape_env, **options
-        )
+        from torch.fx.experimental.proxy_tensor import make_fx
+
+        if compile_fn is not None:
+            if options.get("decompositions"):
+                gm = make_fx(gm, decomposition_table=options["decompositions"])(
+                    *example_inputs
+                )
+            compiled_fn_inner = compile_fn(gm, example_inputs)
+
+            from torch._functorch._aot_autograd.runtime_wrappers import (
+                SerializableCompiledFunction,
+            )
+            from torch._functorch._aot_autograd.utils import simple_wraps
+
+            @simple_wraps(compiled_fn_inner)
+            def forward(*runtime_args: tuple[Any]):
+                full_args = []
+                full_args.extend(runtime_args)
+                return compiled_fn_inner(full_args)
+
+            # # Just for convenience
+            # forward.zero_grad = gm.zero_grad
+            # forward.named_parameters = gm.named_parameters
+            # forward.named_buffers = gm.named_buffers
+
+            # TODO: add a real cache function
+            # entry = _cache_inference_info(
+            #     aot_config,
+            #     fw_metadata,
+            #     maybe_subclass_meta,
+            #     compiled_fw,
+            #     aot_forward_graph_str,
+            #     wrappers,
+            # )
+
+            # Do we need the post compile passes in _aot_stage2b_compile_forward_or_inference(?
+
+            forward.serialize = SerializableCompiledFunction(forward, lambda: None)  # type: ignore[attr-defined]
+            compiled_fn = forward
+
+            # compiled_fn2 = compile_fx(
+            #     gm, example_inputs, ignore_shape_env=ignore_shape_env, **options
+            # )
+        else:
+            compiled_fn = compile_fx(
+                gm, example_inputs, ignore_shape_env=ignore_shape_env, **options
+            )
         assert callable(compiled_fn)
         if aot:
             if not hasattr(compiled_fn, "serialize"):

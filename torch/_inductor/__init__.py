@@ -412,6 +412,7 @@ def standalone_compile(
     ] = "from_graph",
     options: Optional[dict[str, Any]] = None,
     aot: bool = False,  # AOT mode, which uses BundledAOTAutogradCache
+    compile_fn=None,
 ) -> CompiledArtifact:
     """
     Precompilation API for inductor.
@@ -443,5 +444,10 @@ def standalone_compile(
 
     options = options if options else {}
     return standalone_compile(
-        gm, example_inputs, dynamic_shapes=dynamic_shapes, options=options, aot=aot
+        gm,
+        example_inputs,
+        dynamic_shapes=dynamic_shapes,
+        options=options,
+        aot=aot,
+        compile_fn=compile_fn,
     )
